@@ -34,6 +34,7 @@ import (
 	route "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	hcm "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tcp "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
+	auth "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	clusterservice "github.com/envoyproxy/go-control-plane/envoy/service/cluster/v3"
 	discoverygrpc "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	endpointservice "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
@@ -221,6 +222,33 @@ func (x *XDSServer) makeClusters(services []*ServiceInfo) []types.Resource {
 
 	clusters = append(clusters, passthroughClsuter)
 
+	tlsc := &auth.UpstreamTlsContext{
+		CommonTlsContext: &auth.CommonTlsContext{
+			TlsCertificates: []*auth.TlsCertificate{
+				{
+					PrivateKey: &core.DataSource{
+						Specifier: &core.DataSource_Filename{Filename: "certs/servercert.pem"},
+					},
+					CertificateChain: &core.DataSource{
+						Specifier: &core.DataSource_Filename{Filename: "certs/serverkey.pem"},
+					},
+				},
+			},
+			ValidationContextType: &auth.CommonTlsContext_ValidationContext{
+				ValidationContext: &auth.CertificateValidationContext{
+					TrustedCa: &core.DataSource{
+						Specifier: &core.DataSource_Filename{Filename: "certs/cacert.pem"},
+					},
+				},
+			},
+		},
+	}
+
+	mt, err := ptypes.MarshalAny(tlsc)
+	if err != nil {
+		panic(err)
+	}
+
 	// 每一个 polaris service 对应一个 envoy cluster
 	for _, service := range services {
 		circuitBreakerConf := x.namingServer.Cache().CircuitBreaker().GetCircuitBreakerConfig(service.ID)
@@ -239,6 +267,12 @@ func (x *XDSServer) makeClusters(services []*ServiceInfo) []types.Resource {
 			},
 			LbSubsetConfig:   makeLbSubsetConfig(service),
 			OutlierDetection: makeOutlierDetection(circuitBreakerConf),
+			TransportSocket: &core.TransportSocket{
+				Name: "envoy.transport_sockets.tls",
+				ConfigType: &core.TransportSocket_TypedConfig{
+					TypedConfig: mt,
+				},
+			},
 		}
 
 		clusters = append(clusters, cluster)
@@ -529,6 +563,34 @@ func makeListeners() []types.Resource {
 		panic(err)
 	}
 
+	tlsc := &auth.DownstreamTlsContext{
+
+		CommonTlsContext: &auth.CommonTlsContext{
+			TlsCertificates: []*auth.TlsCertificate{
+				{
+					PrivateKey: &core.DataSource{
+						Specifier: &core.DataSource_Filename{Filename: "certs/servercert.pem"},
+					},
+					CertificateChain: &core.DataSource{
+						Specifier: &core.DataSource_Filename{Filename: "certs/serverkey.pem"},
+					},
+				},
+			},
+			ValidationContextType: &auth.CommonTlsContext_ValidationContext{
+				ValidationContext: &auth.CertificateValidationContext{
+					TrustedCa: &core.DataSource{
+						Specifier: &core.DataSource_Filename{Filename: "certs/cacert.pem"},
+					},
+				},
+			},
+		},
+	}
+
+	mt, err := ptypes.MarshalAny(tlsc)
+	if err != nil {
+		panic(err)
+	}
+
 	return []types.Resource{
 		&listener.Listener{
 			Name: "listener_15001",
@@ -551,6 +613,12 @@ func makeListeners() []types.Resource {
 							ConfigType: &listener.Filter_TypedConfig{
 								TypedConfig: pbst,
 							},
+						},
+					},
+					TransportSocket: &core.TransportSocket{
+						Name: "envoy.transport_sockets.tls",
+						ConfigType: &core.TransportSocket_TypedConfig{
+							TypedConfig: mt,
 						},
 					},
 				},
